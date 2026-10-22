@@ -144,8 +144,11 @@ h4{margin:20px 0 6px;font-size:13px;color:var(--mu)}.sa{width:100%;box-sizing:bo
 <script>
 const SUPABASE_URL = "https://fpcxeguhwtkyuaaubjhy.supabase.co";
 const SUPABASE_KEY = "sb_publishable_J6xufr2_62dYYNjHXWpzOQ_YbBW7qSi"; // publishable key: safe in the browser
+// Always return authentication emails to the GitHub Pages project URL, not the domain root.
+const APP_URL = "https://fazinaafridi.github.io/Tasklane-Web-App/";
 const INVITE = /type=invite/.test(location.hash);   // true when arriving from an invitation email
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const S = { me: null, users: [], projects: [], tasks: [], scope: null, q: "", open: null, view: "list", m: new Date(), notifs: [], teams: [], att: [], openTeams: new Set() };
@@ -167,8 +170,7 @@ async function sendPasswordReset() {
   const email = $("#em").value.trim();
   if (!email) { $("#em").focus(); return toast("Enter your email address first, then click Forgot password?"); }
   const btn = $("#forgot"); btn.disabled = true; btn.textContent = "Sending…";
-  const redirectTo = location.origin + location.pathname;
-  const r = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+  const r = await sb.auth.resetPasswordForEmail(email, { redirectTo: APP_URL });
   btn.disabled = false; btn.textContent = "Forgot password?";
   if (r.error) return toast("Could not send reset email: " + r.error.message);
   toast("If an account exists for this email, a password reset link has been sent. Check your inbox.");
@@ -188,7 +190,9 @@ async function saveNewPassword() {
 async function authAction(kind) {
   const email = $("#em").value.trim(), password = $("#pw").value;
   if (!email || password.length < 6) return toast("Enter an email and a password of at least 6 characters.");
-  const r = kind === "up" ? await sb.auth.signUp({ email, password }) : await sb.auth.signInWithPassword({ email, password });
+  const r = kind === "up"
+    ? await sb.auth.signUp({ email, password, options: { emailRedirectTo: APP_URL } })
+    : await sb.auth.signInWithPassword({ email, password });
   const exists = kind === "up" && ((r.error && /already|registered|exists/i.test(r.error.message)) || (r.data && r.data.user && r.data.user.identities && r.data.user.identities.length === 0));
   if (exists) return toast("An account with this email already exists. Please click Sign in instead.");
   if (r.error) return toast(r.error.message);
