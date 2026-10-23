@@ -195,15 +195,25 @@ mk("c4", "p3", "Landing page for the sale", "In progress", "u1", 0, 9, 0, "High"
 mk("c5", "p3", "Campaign launch", "Backlog", "u3", 15, 15, 0, "High", "c3", "milestone");
 DB.task_projects = [...DB.tasks.map(t => ({ task_id: t.id, project_id: t.project_id })), { task_id: "a7", project_id: "p2" }];
 const defs = { tasks: { type: "task", description: "", done: false, status: "draft", visibility: "public", section: "", position: 0, tags: [], location: "", created_by: me }, projects: { description: "", sections: ["To do", "Doing", "Done"], created_by: me }, teams: { created_by: me }, comments: { author_id: me, mentions: [] }, attachments: { created_by: me } };
+const nm = id => (DB.profiles.find(p => p.id === id) || {}).name;
+const note = (tid, body) => DB.task_activity.push({ id: uid(), task_id: tid, actor_id: me, body, created_at: new Date().toISOString() });
+const hook = (table, kind, r, o) => {                      // same lines the live database trigger writes
+  if (table === "task_projects") { const t = DB.tasks.find(x => x.id === r.task_id), p = DB.projects.find(x => x.id === r.project_id); if (t && t.assignee_id && t.project_id !== r.project_id) note(t.id, (kind === "ins" ? "added this task to project " : "removed this task from project ") + (p ? p.name : "a project")); return; }
+  if (table !== "tasks") return;
+  if (kind === "ins") { if (r.assignee_id) note(r.id, "created this task and assigned it to " + nm(r.assignee_id)); return; }
+  if (kind !== "upd" || (!o.assignee_id && !r.assignee_id)) return;
+  const dn = id => (DB.tasks.find(x => x.id === id) || {}).title;
+  [["title", `renamed the task from "${o.title}" to "${r.title}"`], ["done", r.done ? "marked this complete" : "marked this incomplete"], ["assignee_id", r.assignee_id ? "assigned this task to " + nm(r.assignee_id) : "unassigned this task"], ["start_date", "changed the start date to " + (r.start_date || "none")], ["due_date", "changed the due date to " + (r.due_date || "none")], ["priority", "changed the priority to " + (r.priority || "none")], ["section", "moved this task to " + (r.section || "the first section")], ["visibility", "changed the visibility to " + r.visibility], ["description", "edited the description"], ["type", "changed the type to " + r.type], ["dep_id", r.dep_id ? 'set the dependency to "' + dn(r.dep_id) + '"' : "removed the dependency"]].forEach(([k, b]) => { if (r[k] !== o[k]) note(r.id, b); });
+};
 const sb = (() => {
   const Q = table => {
     let op = "select", payload, F = [], O = [], lim = 0, one = 0, ret = 0;
     const fin = rows => { rows = rows.map(r => ({ ...r })); if (op === "select" || ret) return one ? (rows[0] ? { data: rows[0], error: null } : one === 2 ? { data: null, error: null } : { data: null, error: { message: "No rows found" } }) : { data: rows, error: null }; return { data: null, error: null }; };
     const run = () => {
       const T = DB[table] || (DB[table] = []), hit = r => F.every(([k, v]) => r[k] === v), now = new Date().toISOString();
-      if (op === "insert") return fin((Array.isArray(payload) ? payload : [payload]).map(r => { const x = { id: uid(), created_at: now, updated_at: now, ...(defs[table] || {}), ...r }; if (table === "tasks" && x.assignee_id && x.status === "draft") x.status = "created"; T.push(x); return x; }));
-      if (op === "update") { const rows = T.filter(hit); rows.forEach(r => { Object.assign(r, payload, { updated_at: now }); if (table === "tasks" && r.assignee_id && r.status === "draft") r.status = "created"; }); return fin(rows); }
-      if (op === "delete") { DB[table] = T.filter(r => !hit(r) && !(table === "tasks" && F.some(([k, v]) => k === "id" && r.parent_id === v))); return { data: null, error: null }; }
+      if (op === "insert") return fin((Array.isArray(payload) ? payload : [payload]).map(r => { const x = { id: uid(), created_at: now, updated_at: now, ...(defs[table] || {}), ...r }; if (table === "tasks" && x.assignee_id && x.status === "draft") x.status = "created"; T.push(x); hook(table, "ins", x); return x; }));
+      if (op === "update") { const rows = T.filter(hit); rows.forEach(r => { const o = { ...r }; Object.assign(r, payload, { updated_at: now }); if (table === "tasks" && r.assignee_id && r.status === "draft") r.status = "created"; hook(table, "upd", r, o); }); return fin(rows); }
+      if (op === "delete") { T.filter(hit).forEach(r => hook(table, "del", r)); DB[table] = T.filter(r => !hit(r) && !(table === "tasks" && F.some(([k, v]) => k === "id" && r.parent_id === v))); return { data: null, error: null }; }
       let rows = T.filter(hit).sort((a, b) => { for (const [k, asc] of O) { if (a[k] < b[k]) return asc ? -1 : 1; if (a[k] > b[k]) return asc ? 1 : -1; } return 0; });
       if (lim) rows = rows.slice(0, lim);
       if (table === "teams") rows = rows.map(t => ({ ...t, team_members: DB.team_members.filter(m => m.team_id === t.id).map(m => ({ user_id: m.user_id })) }));
@@ -569,7 +579,7 @@ async function sideChange(el) {
     const id = S.open, pid = el.dataset.tproj;
     r = el.checked ? await sb.from("task_projects").insert({ task_id: id, project_id: pid }) : await sb.from("task_projects").delete().eq("task_id", id).eq("project_id", pid);
     if (r.error) { toast(r.error.message); el.checked = !el.checked; return; }
-    (S.tp[id] = S.tp[id] || new Set())[el.checked ? "add" : "delete"](pid); return render();
+    (S.tp[id] = S.tp[id] || new Set())[el.checked ? "add" : "delete"](pid); render(); return loadFeed();
   }
   if (el.id === "fi") { for (const f of el.files) await upload(f); el.value = ""; }
 }
